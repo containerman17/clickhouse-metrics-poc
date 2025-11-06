@@ -2,9 +2,9 @@ package syncer
 
 import (
 	"clickhouse-metrics-poc/pkg/chwrapper"
+	"clickhouse-metrics-poc/pkg/indexer"
 	"clickhouse-metrics-poc/pkg/ingest/cache"
 	"clickhouse-metrics-poc/pkg/ingest/rpc"
-	"clickhouse-metrics-poc/pkg/metrics"
 	"context"
 	"fmt"
 	"log"
@@ -61,8 +61,8 @@ type ChainSyncer struct {
 	lastPrintTime time.Time
 	startTime     time.Time
 
-	// Metrics runner (optional)
-	metricsRunner *metrics.MetricsRunner
+	// Index runner - one per chain
+	indexRunner *indexer.IndexRunner
 }
 
 // NewChainSyncer creates a new chain syncer
@@ -104,13 +104,13 @@ func NewChainSyncer(cfg Config) (*ChainSyncer, error) {
 		startTime:      time.Now(),
 	}
 
-	// Initialize metrics runner - REQUIRED
-	metricsRunner, err := metrics.NewMetricsRunner(cfg.CHConn, "sql/metrics")
+	// Initialize index runner - one per chain
+	indexRunner, err := indexer.NewIndexRunner(cfg.ChainID, cfg.CHConn, ".")
 	if err != nil {
-		return nil, fmt.Errorf("failed to create metrics runner: %w", err)
+		return nil, fmt.Errorf("failed to create index runner: %w", err)
 	}
-	cs.metricsRunner = metricsRunner
-	log.Printf("[Chain %d] Metrics runner initialized", cfg.ChainID)
+	cs.indexRunner = indexRunner
+	log.Printf("[Chain %d] Index runner initialized", cfg.ChainID)
 
 	return cs, nil
 }
@@ -395,7 +395,7 @@ func (cs *ChainSyncer) writeBlocks(blocks []*rpc.NormalizedBlock) error {
 		cs.watermark = maxBlock
 	}
 
-	// Update metrics runner with latest block timestamp (only once per batch)
+	// Update index runner with latest block (only once per batch)
 	if len(blocks) > 0 {
 		// Find the latest block by number
 		var latestBlock *rpc.NormalizedBlock
@@ -418,10 +418,11 @@ func (cs *ChainSyncer) writeBlocks(blocks []*rpc.NormalizedBlock) error {
 				return fmt.Errorf("failed to parse block timestamp: %w", err)
 			}
 
-			// Call OnBlock with the latest block's timestamp
+			// Call OnBlock with block number and timestamp
+			// IndexRunner is per-chain, so no race conditions
 			blockTime := time.Unix(int64(timestamp), 0).UTC()
-			if err := cs.metricsRunner.OnBlock(blockTime, cs.chainId); err != nil {
-				return fmt.Errorf("failed to update metrics: %w", err)
+			if err := cs.indexRunner.OnBlock(uint64(latestBlockNum), blockTime); err != nil {
+				return fmt.Errorf("failed to update indexes: %w", err)
 			}
 		}
 	}
