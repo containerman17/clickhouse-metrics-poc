@@ -11,7 +11,7 @@ This directory contains SQL templates for computing blockchain metrics at variou
 
 ## Template Placeholders
 
-The metrics runner (`pkg/metrics/metrics_runner.go`) replaces these placeholders when executing queries:
+The index runner (`pkg/indexer/index_runner.go`) replaces these placeholders when executing queries:
 
 | Placeholder | Description | Example Replacement |
 |------------|-------------|---------------------|
@@ -203,15 +203,15 @@ ORDER BY period;
 
 This handles variable month lengths correctly (28-31 days) as well as all other granularities.
 
-## Metrics Runner Behavior
+## Index Runner Behavior
 
-The metrics runner (`pkg/metrics/metrics_runner.go`):
+The index runner (`pkg/indexer/index_runner.go`) processes metrics alongside incremental indexers:
 
 1. Tracks watermarks per (chain_id, metric_name, granularity)
-2. Monitors latest block time via `OnBlock()` calls
+2. Receives latest block metadata through `HandleBatch()`
 3. Calculates complete periods using period boundary functions
 4. Executes metric SQL for all complete periods in batch
-5. Updates watermark after successful execution
+5. Updates metric watermarks after successful execution
 6. Processes all granularities for each metric file
 
 Watermarks are stored in:

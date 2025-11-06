@@ -2,9 +2,9 @@ package syncer
 
 import (
 	"clickhouse-metrics-poc/pkg/chwrapper"
+	"clickhouse-metrics-poc/pkg/indexer"
 	"clickhouse-metrics-poc/pkg/ingest/cache"
 	"clickhouse-metrics-poc/pkg/ingest/rpc"
-	"clickhouse-metrics-poc/pkg/metrics"
 	"context"
 	"fmt"
 	"log"
@@ -61,8 +61,8 @@ type ChainSyncer struct {
 	lastPrintTime time.Time
 	startTime     time.Time
 
-	// Metrics runner (optional)
-	metricsRunner *metrics.MetricsRunner
+	// Index runner (optional)
+	indexRunner *indexer.IndexRunner
 }
 
 // NewChainSyncer creates a new chain syncer
@@ -104,13 +104,13 @@ func NewChainSyncer(cfg Config) (*ChainSyncer, error) {
 		startTime:      time.Now(),
 	}
 
-	// Initialize metrics runner - REQUIRED
-	metricsRunner, err := metrics.NewMetricsRunner(cfg.CHConn, "sql/metrics")
+	// Initialize index runner - REQUIRED
+	indexRunner, err := indexer.NewIndexRunner(cfg.CHConn, cfg.ChainID, indexer.Options{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create metrics runner: %w", err)
+		return nil, fmt.Errorf("failed to create index runner: %w", err)
 	}
-	cs.metricsRunner = metricsRunner
-	log.Printf("[Chain %d] Metrics runner initialized", cfg.ChainID)
+	cs.indexRunner = indexRunner
+	log.Printf("[Chain %d] Index runner initialized", cfg.ChainID)
 
 	return cs, nil
 }
@@ -376,8 +376,9 @@ func (cs *ChainSyncer) writeBlocks(blocks []*rpc.NormalizedBlock) error {
 	}
 	log.Printf("[Chain %d] Inserted %d blocks and %d txs in %v", cs.chainId, len(blocks), txCount, elapsed)
 
-	// Update watermark to the highest block number in this batch
+	// Update watermark to the highest block number in this batch and capture latest block
 	maxBlock := uint32(0)
+	var latestBlock *rpc.NormalizedBlock
 	for _, b := range blocks {
 		blockNum, err := hexToUint32(b.Block.Number)
 		if err != nil {
@@ -385,6 +386,7 @@ func (cs *ChainSyncer) writeBlocks(blocks []*rpc.NormalizedBlock) error {
 		}
 		if blockNum > maxBlock {
 			maxBlock = blockNum
+			latestBlock = b
 		}
 	}
 
@@ -395,34 +397,15 @@ func (cs *ChainSyncer) writeBlocks(blocks []*rpc.NormalizedBlock) error {
 		cs.watermark = maxBlock
 	}
 
-	// Update metrics runner with latest block timestamp (only once per batch)
-	if len(blocks) > 0 {
-		// Find the latest block by number
-		var latestBlock *rpc.NormalizedBlock
-		latestBlockNum := uint32(0)
-		for _, b := range blocks {
-			blockNum, err := hexToUint32(b.Block.Number)
-			if err != nil {
-				continue
-			}
-			if blockNum > latestBlockNum {
-				latestBlockNum = blockNum
-				latestBlock = b
-			}
+	if latestBlock != nil && cs.indexRunner != nil {
+		timestamp, err := hexToUint64(latestBlock.Block.Timestamp)
+		if err != nil {
+			return fmt.Errorf("failed to parse block timestamp: %w", err)
 		}
 
-		if latestBlock != nil {
-			// Convert hex timestamp to uint64
-			timestamp, err := hexToUint64(latestBlock.Block.Timestamp)
-			if err != nil {
-				return fmt.Errorf("failed to parse block timestamp: %w", err)
-			}
-
-			// Call OnBlock with the latest block's timestamp
-			blockTime := time.Unix(int64(timestamp), 0).UTC()
-			if err := cs.metricsRunner.OnBlock(blockTime, cs.chainId); err != nil {
-				return fmt.Errorf("failed to update metrics: %w", err)
-			}
+		blockTime := time.Unix(int64(timestamp), 0).UTC()
+		if err := cs.indexRunner.HandleBatch(blockTime, uint64(maxBlock)); err != nil {
+			return fmt.Errorf("failed to update indexes: %w", err)
 		}
 	}
 
