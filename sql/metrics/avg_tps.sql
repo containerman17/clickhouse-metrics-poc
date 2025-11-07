@@ -17,7 +17,7 @@ WITH period_data AS (
     SELECT
         toStartOf{granularity}(block_time) as period,
         count(*) as tx_count
-    FROM raw_transactions
+    FROM raw_txs
     WHERE chain_id = {chain_id:UInt32}
       AND block_time >= {first_period:DateTime}
       AND block_time < {last_period:DateTime}

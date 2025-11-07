@@ -17,7 +17,7 @@ WITH txs_per_second AS (
         toStartOf{granularity}(block_time) as period,
         toStartOfSecond(block_time) as second,
         count(*) as tx_count
-    FROM raw_transactions
+    FROM raw_txs
     WHERE chain_id = {chain_id:UInt32}
       AND block_time >= {first_period:DateTime}
       AND block_time < {last_period:DateTime}

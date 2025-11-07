@@ -197,7 +197,7 @@ func (r *MetricsRunner) getEarliestBlockTime() time.Time {
 
 	query := `
 	SELECT min(block_time) 
-	FROM raw_transactions 
+	FROM raw_txs 
 	WHERE chain_id = ?`
 
 	row := r.conn.QueryRow(ctx, query, r.chainId)

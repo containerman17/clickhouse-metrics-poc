@@ -15,6 +15,8 @@ const (
 	blockKeyPrefix = "block:"
 	// blockKeyPadding is the zero-padded length for block numbers (14 digits supports up to 100 trillion blocks)
 	blockKeyPadding = 14
+	// checkpointKey is the key for storing the last cached block checkpoint
+	checkpointKey = "checkpoint:last_cached_block"
 )
 
 // Cache implements caching using PebbleDB
@@ -173,4 +175,33 @@ func (c *Cache) GetMetrics() string {
 // Close closes the PebbleDB database
 func (c *Cache) Close() error {
 	return c.db.Close()
+}
+
+// GetCheckpoint retrieves the last cached block number checkpoint
+// Returns 0 if no checkpoint exists
+func (c *Cache) GetCheckpoint() (int64, error) {
+	value, closer, err := c.db.Get([]byte(checkpointKey))
+	if err == pebble.ErrNotFound {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to get checkpoint: %w", err)
+	}
+	defer closer.Close()
+
+	blockNum, err := strconv.ParseInt(string(value), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse checkpoint: %w", err)
+	}
+
+	return blockNum, nil
+}
+
+// SetCheckpoint saves the last cached block number checkpoint
+func (c *Cache) SetCheckpoint(blockNum int64) error {
+	value := []byte(strconv.FormatInt(blockNum, 10))
+	if err := c.db.Set([]byte(checkpointKey), value, pebble.Sync); err != nil {
+		return fmt.Errorf("failed to set checkpoint: %w", err)
+	}
+	return nil
 }

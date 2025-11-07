@@ -30,6 +30,11 @@ func main() {
 			Run:   func(command *cobra.Command, args []string) { cmd.RunIngest() },
 		},
 		&cobra.Command{
+			Use:   "cache",
+			Short: "Fill RPC cache at max speed (no ClickHouse)",
+			Run:   func(command *cobra.Command, args []string) { cmd.RunCache() },
+		},
+		&cobra.Command{
 			Use:   "size",
 			Short: "Show ClickHouse table sizes and disk usage",
 			Run:   func(command *cobra.Command, args []string) { cmd.RunSize() },

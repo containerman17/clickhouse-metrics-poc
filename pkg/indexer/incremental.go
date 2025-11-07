@@ -21,7 +21,7 @@ func (r *IndexRunner) processBatchedIncrementals() {
 		}
 
 		watermark := r.getWatermark(indexerName)
-		
+
 		// Initialize to block 1 if never run
 		if watermark.LastBlockNum == 0 {
 			watermark.LastBlockNum = 1
@@ -33,13 +33,17 @@ func (r *IndexRunner) processBatchedIncrementals() {
 		}
 
 		// Run indexer
-		fmt.Printf("[Chain %d] Running %s - blocks %d to %d\n", 
+		fmt.Printf("[Chain %d] Running %s - blocks %d to %d\n",
 			r.chainId, indexerName, watermark.LastBlockNum+1, r.latestBlockNum)
-		
+
+		start := time.Now()
 		if err := r.runIncrementalIndexer(indexerFile, "batched", watermark.LastBlockNum+1, r.latestBlockNum); err != nil {
 			fmt.Printf("[Chain %d] FATAL: Failed to run %s: %v\n", r.chainId, indexerName, err)
 			panic(err)
 		}
+		elapsed := time.Since(start)
+		fmt.Printf("[Chain %d] %s - blocks %d to %d - time taken: %s\n",
+			r.chainId, indexerName, watermark.LastBlockNum+1, r.latestBlockNum, elapsed)
 
 		// Update watermark and last run time
 		watermark.LastBlockNum = r.latestBlockNum
@@ -62,7 +66,7 @@ func (r *IndexRunner) processImmediateIncrementals() {
 		}
 
 		watermark := r.getWatermark(indexerName)
-		
+
 		// Initialize to block 1 if never run
 		if watermark.LastBlockNum == 0 {
 			watermark.LastBlockNum = 1
@@ -73,17 +77,28 @@ func (r *IndexRunner) processImmediateIncrementals() {
 			continue
 		}
 
+		// Limit to 10k blocks at a time
+		endBlock := r.latestBlockNum
+		const maxBlocks = 20000
+		if endBlock-watermark.LastBlockNum > maxBlocks {
+			endBlock = watermark.LastBlockNum + maxBlocks
+		}
+
 		// Run indexer
-		fmt.Printf("[Chain %d] Running %s - blocks %d to %d\n", 
-			r.chainId, indexerName, watermark.LastBlockNum+1, r.latestBlockNum)
-		
-		if err := r.runIncrementalIndexer(indexerFile, "immediate", watermark.LastBlockNum+1, r.latestBlockNum); err != nil {
+		fmt.Printf("[Chain %d] Running %s - blocks %d to %d\n",
+			r.chainId, indexerName, watermark.LastBlockNum+1, endBlock)
+
+		start := time.Now()
+		if err := r.runIncrementalIndexer(indexerFile, "immediate", watermark.LastBlockNum+1, endBlock); err != nil {
 			fmt.Printf("[Chain %d] FATAL: Failed to run %s: %v\n", r.chainId, indexerName, err)
 			panic(err)
 		}
+		elapsed := time.Since(start)
+		fmt.Printf("[Chain %d] %s - blocks %d to %d - time taken: %s\n",
+			r.chainId, indexerName, watermark.LastBlockNum+1, endBlock, elapsed)
 
 		// Update watermark and last run time
-		watermark.LastBlockNum = r.latestBlockNum
+		watermark.LastBlockNum = endBlock
 		if err := r.saveWatermark(indexerName, watermark); err != nil {
 			fmt.Printf("[Chain %d] FATAL: Failed to save watermark for %s: %v\n", r.chainId, indexerName, err)
 			panic(err)
@@ -112,4 +127,3 @@ func (r *IndexRunner) shouldRun(indexerName string, minInterval time.Duration) b
 	}
 	return time.Since(lastRun) >= minInterval
 }
-

@@ -16,7 +16,7 @@ SELECT
     {chain_id:UInt32} as chain_id,
     toStartOf{granularity}(block_time) as period,
     max(gas_price) as value
-FROM raw_transactions
+FROM raw_txs
 WHERE chain_id = {chain_id:UInt32}
   AND block_time >= {first_period:DateTime}
   AND block_time < {last_period:DateTime}

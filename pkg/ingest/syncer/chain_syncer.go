@@ -2,9 +2,9 @@ package syncer
 
 import (
 	"clickhouse-metrics-poc/pkg/chwrapper"
+	"clickhouse-metrics-poc/pkg/indexer"
 	"clickhouse-metrics-poc/pkg/ingest/cache"
 	"clickhouse-metrics-poc/pkg/ingest/rpc"
-	"clickhouse-metrics-poc/pkg/indexer"
 	"context"
 	"fmt"
 	"log"
@@ -131,7 +131,7 @@ func (cs *ChainSyncer) Start() error {
 		return fmt.Errorf("failed to get max block from blocks table: %w", err)
 	}
 
-	cs.maxBlockTransactions, err = chwrapper.GetLatestBlockForChain(cs.conn, "raw_transactions", cs.chainId)
+	cs.maxBlockTransactions, err = chwrapper.GetLatestBlockForChain(cs.conn, "raw_txs", cs.chainId)
 	if err != nil {
 		return fmt.Errorf("failed to get max block from transactions table: %w", err)
 	}

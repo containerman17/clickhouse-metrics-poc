@@ -127,10 +127,10 @@ clickhouse-client "SELECT period, value FROM icm_sent_hour LIMIT 10"
 clickhouse-client "SELECT block_number, block_time, hex(hash) as hash, hex(parent_hash) as parent_hash, gas_used, gas_limit FROM raw_blocks ORDER BY block_number DESC LIMIT 5"
 
 # Query raw transactions
-clickhouse-client "SELECT block_number, transaction_index, hex(hash) as hash, hex(\`from\`) as from, hex(to) as to, value, gas_used FROM raw_transactions LIMIT 10"
+clickhouse-client "SELECT block_number, transaction_index, hex(hash) as hash, hex(\`from\`) as from, hex(to) as to, value, gas_used FROM raw_txs LIMIT 10"
 
 # Count total transactions
-clickhouse-client "SELECT count() FROM raw_transactions"
+clickhouse-client "SELECT count() FROM raw_txs"
 
 # Check sync status
 clickhouse-client "SELECT * FROM sync_watermark"
@@ -164,7 +164,7 @@ For detailed information about granular metrics, see: **[sql/metrics/README.md](
 
 ## Architecture
 
-- **Raw Tables**: Store blockchain data as-is (`raw_blocks`, `raw_transactions`, `raw_traces`, `raw_logs`)
+- **Raw Tables**: Store blockchain data as-is (`raw_blocks`, `raw_txs`, `raw_traces`, `raw_logs`)
 - **Indexer Runner**: One per chain, processes three types of indexers:
   - **Granular Metrics**: Time-based aggregations (hour/day/week/month)
   - **Batched Incremental**: Block-based indexers, throttled to 5min intervals
@@ -196,7 +196,7 @@ For detailed information about granular metrics, see: **[sql/metrics/README.md](
 raw_blocks
 raw_logs
 raw_traces
-raw_transactions
+raw_txs
 
 # Watermark tables
 indexer_watermarks

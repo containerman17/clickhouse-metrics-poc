@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS raw_blocks (
 ORDER BY (chain_id, block_number);
 
 -- Transactions table - merged with receipts for analytics performance
-CREATE TABLE IF NOT EXISTS raw_transactions (
+CREATE TABLE IF NOT EXISTS raw_txs (
     chain_id UInt32,  -- Multiple chains in same tables
     hash FixedString(32),
     block_number UInt32,
@@ -76,7 +76,9 @@ CREATE TABLE IF NOT EXISTS raw_traces (
     input String,
     output String,
     call_type LowCardinality(String),  -- CALL, DELEGATECALL, STATICCALL, CREATE, CREATE2, etc.
-    tx_success Bool  -- Transaction success status (denormalized from raw_transactions)
+    tx_success Bool,  -- Transaction success status (denormalized from raw_txs)
+    tx_from FixedString(20),  -- Original transaction sender (denormalized)
+    tx_to Nullable(FixedString(20))  -- Original transaction target (denormalized)
 ) ENGINE = MergeTree()
 ORDER BY (chain_id, block_number);
 

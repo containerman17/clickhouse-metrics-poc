@@ -7,9 +7,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 )
 
 type ChainConfig struct {
@@ -49,12 +47,7 @@ func RunIngest() {
 		log.Fatalf("Failed to create tables: %v", err)
 	}
 
-	// Setup signal handling for graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
 	var wg sync.WaitGroup
-	syncers := make([]*syncer.ChainSyncer, 0, len(configs))
 
 	// Start a syncer for each chain
 	for _, cfg := range configs {
@@ -89,8 +82,6 @@ func RunIngest() {
 			log.Fatalf("Failed to create syncer for chain %d: %v", cfg.ChainID, err)
 		}
 
-		syncers = append(syncers, chainSyncer)
-
 		wg.Add(1)
 		go func(cs *syncer.ChainSyncer, chainID uint32) {
 			defer wg.Done()
@@ -103,13 +94,5 @@ func RunIngest() {
 		log.Printf("Started syncer for chain %d", cfg.ChainID)
 	}
 
-	// Wait for shutdown signal
-	<-sigChan
-	log.Println("Received shutdown signal, stopping all syncers...")
-	for _, cs := range syncers {
-		cs.Stop()
-	}
-
 	wg.Wait()
-	log.Println("All syncers stopped")
 }

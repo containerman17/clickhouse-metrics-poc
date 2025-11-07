@@ -1,4 +1,4 @@
-- List all chains associated with a given address
+- [Done] List all chains associated with a given address
     Incremental into a table
 - List latest blocks
     Just a simple max over all

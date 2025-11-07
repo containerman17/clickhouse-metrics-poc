@@ -59,7 +59,7 @@ SELECT
     {chain_id:UInt32} as chain_id,
     toStartOf{granularity}(block_time) as period,
     count(*) as value  -- or appropriate aggregation
-FROM raw_transactions  -- or raw_traces, raw_logs, raw_blocks
+FROM raw_txs  -- or raw_traces, raw_logs, raw_blocks
 WHERE chain_id = {chain_id:UInt32}
   AND block_time >= {first_period:DateTime}
   AND block_time < {last_period:DateTime}
@@ -189,7 +189,7 @@ WITH period_data AS (
     SELECT
         toStartOf{granularity}(block_time) as period,
         count(*) as tx_count
-    FROM raw_transactions
+    FROM raw_txs
     WHERE chain_id = {chain_id:UInt32}
       AND block_time >= {first_period:DateTime}
       AND block_time < {last_period:DateTime}
