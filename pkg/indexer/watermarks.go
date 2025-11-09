@@ -15,11 +15,19 @@ type Watermark struct {
 	LastBlockNum uint64
 }
 
+// watermarkKey creates a key for watermark storage
+func watermarkKey(indexerName, granularity string) string {
+	if granularity == "" {
+		return indexerName
+	}
+	return fmt.Sprintf("%s:%s", indexerName, granularity)
+}
+
 // loadWatermarks loads all watermarks for this chain from DB into memory
 func (r *IndexRunner) loadWatermarks() error {
 	ctx := context.Background()
 	query := `
-	SELECT indexer_name, last_period, last_block_num
+	SELECT indexer_name, granularity, last_period, last_block_num
 	FROM indexer_watermarks FINAL
 	WHERE chain_id = ?`
 
@@ -32,14 +40,16 @@ func (r *IndexRunner) loadWatermarks() error {
 	count := 0
 	for rows.Next() {
 		var name string
+		var granularity string
 		var period time.Time
 		var blockNum uint64
 
-		if err := rows.Scan(&name, &period, &blockNum); err != nil {
+		if err := rows.Scan(&name, &granularity, &period, &blockNum); err != nil {
 			return fmt.Errorf("failed to scan watermark: %w", err)
 		}
 
-		r.watermarks[name] = &Watermark{
+		key := watermarkKey(name, granularity)
+		r.watermarks[key] = &Watermark{
 			LastPeriod:   period,
 			LastBlockNum: blockNum,
 		}
@@ -54,7 +64,7 @@ func (r *IndexRunner) loadWatermarks() error {
 	return nil
 }
 
-// getWatermark returns watermark from memory, creating empty if not exists
+// getWatermark returns watermark from memory, creating empty if not exists (for incrementals)
 func (r *IndexRunner) getWatermark(indexerName string) *Watermark {
 	if wm, exists := r.watermarks[indexerName]; exists {
 		return wm
@@ -66,12 +76,35 @@ func (r *IndexRunner) getWatermark(indexerName string) *Watermark {
 	return wm
 }
 
-// saveWatermark saves watermark to DB
+// getWatermarkWithGranularity returns watermark from memory for granular metrics
+func (r *IndexRunner) getWatermarkWithGranularity(indexerName string, granularity string) *Watermark {
+	key := watermarkKey(indexerName, granularity)
+	if wm, exists := r.watermarks[key]; exists {
+		return wm
+	}
+
+	// Create new empty watermark
+	wm := &Watermark{}
+	r.watermarks[key] = wm
+	return wm
+}
+
+// saveWatermark saves watermark to DB (for incrementals)
 func (r *IndexRunner) saveWatermark(indexerName string, wm *Watermark) error {
 	ctx := context.Background()
 	query := `
-	INSERT INTO indexer_watermarks (chain_id, indexer_name, last_period, last_block_num)
-	VALUES (?, ?, ?, ?)`
+	INSERT INTO indexer_watermarks (chain_id, indexer_name, granularity, last_period, last_block_num)
+	VALUES (?, ?, ?, ?, ?)`
 
-	return r.conn.Exec(ctx, query, r.chainId, indexerName, wm.LastPeriod, wm.LastBlockNum)
+	return r.conn.Exec(ctx, query, r.chainId, indexerName, "", wm.LastPeriod, wm.LastBlockNum)
+}
+
+// saveWatermarkWithGranularity saves watermark to DB for granular metrics
+func (r *IndexRunner) saveWatermarkWithGranularity(indexerName string, granularity string, wm *Watermark) error {
+	ctx := context.Background()
+	query := `
+	INSERT INTO indexer_watermarks (chain_id, indexer_name, granularity, last_period, last_block_num)
+	VALUES (?, ?, ?, ?, ?)`
+
+	return r.conn.Exec(ctx, query, r.chainId, indexerName, granularity, wm.LastPeriod, wm.LastBlockNum)
 }

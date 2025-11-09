@@ -11,10 +11,11 @@ var epoch = time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
 func (r *IndexRunner) processGranularMetrics() {
 	for _, metricFile := range r.granularMetrics {
 		for _, granularity := range []string{"hour", "day", "week", "month"} {
-			indexerName := fmt.Sprintf("metrics/%s_%s", metricFile, granularity)
+			// Use just the metric filename for indexer name, granularity tracked separately
+			indexerName := fmt.Sprintf("metrics/%s", metricFile)
 
-			watermark := r.getWatermark(indexerName)
-			
+			watermark := r.getWatermarkWithGranularity(indexerName, granularity)
+
 			// Initialize to epoch if never run
 			if watermark.LastPeriod.IsZero() {
 				watermark.LastPeriod = epoch
@@ -27,17 +28,19 @@ func (r *IndexRunner) processGranularMetrics() {
 			}
 
 			// Run metric
-			fmt.Printf("[Chain %d] Running %s - processing %d periods\n", r.chainId, indexerName, len(periods))
-			
+			start := time.Now()
 			if err := r.runGranularMetric(metricFile, granularity, periods); err != nil {
-				fmt.Printf("[Chain %d] FATAL: Failed to run %s: %v\n", r.chainId, indexerName, err)
+				fmt.Printf("[Chain %d] FATAL: Failed to run %s (%s): %v\n", r.chainId, indexerName, granularity, err)
 				panic(err)
 			}
+			elapsed := time.Since(start)
+			fmt.Printf("[Chain %d] %s (%s) - processed %d periods - time taken: %s\n",
+				r.chainId, indexerName, granularity, len(periods), elapsed)
 
 			// Update watermark
 			watermark.LastPeriod = periods[len(periods)-1]
-			if err := r.saveWatermark(indexerName, watermark); err != nil {
-				fmt.Printf("[Chain %d] FATAL: Failed to save watermark for %s: %v\n", r.chainId, indexerName, err)
+			if err := r.saveWatermarkWithGranularity(indexerName, granularity, watermark); err != nil {
+				fmt.Printf("[Chain %d] FATAL: Failed to save watermark for %s (%s): %v\n", r.chainId, indexerName, granularity, err)
 				panic(err)
 			}
 		}
@@ -49,17 +52,14 @@ func (r *IndexRunner) runGranularMetric(metricFile string, granularity string, p
 	firstPeriod := periods[0]
 	lastPeriod := nextPeriod(periods[len(periods)-1], granularity) // exclusive end
 
-	// Order matters! Specific patterns first, then generic
 	params := []struct{ key, value string }{
-		{"toStartOf{granularity}", fmt.Sprintf("toStartOf%s", capitalize(granularity))},
-		{"_{granularity}", fmt.Sprintf("_%s", granularity)},
 		{"{chain_id:UInt32}", fmt.Sprintf("%d", r.chainId)},
 		{"{first_period:DateTime}", fmt.Sprintf("toDateTime64('%s', 3)", firstPeriod.Format("2006-01-02 15:04:05.000"))},
 		{"{last_period:DateTime}", fmt.Sprintf("toDateTime64('%s', 3)", lastPeriod.Format("2006-01-02 15:04:05.000"))},
-		{"{granularity}", granularity}, // Last - after specific patterns
+		{"{granularity}", granularity},
+		{"{granularityCamelCase}", capitalize(granularity)},
 	}
 
 	filename := fmt.Sprintf("metrics/%s.sql", metricFile)
 	return executeSQLFile(r.conn, r.sqlDir, filename, params)
 }
-
