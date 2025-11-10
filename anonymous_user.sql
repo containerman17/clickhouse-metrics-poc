@@ -17,7 +17,7 @@ CREATE SETTINGS PROFILE anonymous_profile SETTINGS
     max_threads = 1,
 
     -- cap what the browser digests
-    max_result_rows  = 100_000,
+    max_result_rows  = 1_000,
     max_result_bytes = 64_000_000,
     result_overflow_mode = 'break',
 
@@ -45,8 +45,8 @@ CREATE SETTINGS PROFILE anonymous_heavy_profile SETTINGS
     max_partitions_to_read = 0,
 
     -- reasonable output cap so browsers don’t choke anyway
-    max_result_rows  = 200_000,
-    max_result_bytes = 128_000_000,
+    max_result_rows  = 1_000,
+    max_result_bytes = 64_000_000,
     result_overflow_mode = 'break',
 
     max_execution_time = 60,
@@ -59,20 +59,14 @@ DROP QUOTA IF EXISTS anonymous_quota;
 CREATE QUOTA anonymous_quota KEYED BY ip_address
     FOR INTERVAL 1 minute
         MAX QUERIES 4000,
-        MAX ERRORS 200
-    FOR INTERVAL 1 hour
-        MAX QUERIES 100000,
-        MAX ERRORS 2000;
+        MAX ERRORS 200;
 
 -- Heavy user: throttle by request count; this is your "2 per minute" gate
 DROP QUOTA IF EXISTS anonymous_heavy_quota;
 CREATE QUOTA anonymous_heavy_quota KEYED BY ip_address
     FOR INTERVAL 1 minute
-        MAX QUERIES 2,
-        MAX ERRORS 10
-    FOR INTERVAL 1 hour
-        MAX QUERIES 60,
-        MAX ERRORS 100;
+        MAX QUERIES 3,
+        MAX ERRORS 10;
 
 -- === Users (demo: open to all IPs, throttled by quotas/profiles) ===
 

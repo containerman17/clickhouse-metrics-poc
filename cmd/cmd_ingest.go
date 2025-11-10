@@ -16,6 +16,7 @@ type ChainConfig struct {
 	StartBlock     int64  `json:"startBlock,omitempty"`
 	MaxConcurrency int    `json:"maxConcurrency,omitempty"`
 	FetchBatchSize int    `json:"fetchBatchSize,omitempty"`
+	Name           string `json:"name"`
 }
 
 func RunIngest() {
@@ -33,6 +34,13 @@ func RunIngest() {
 
 	if len(configs) == 0 {
 		log.Fatal("No chain configurations found in config.json")
+	}
+
+	// Validate configuration
+	for _, cfg := range configs {
+		if cfg.Name == "" {
+			log.Fatalf("Chain %d has empty name - name is required", cfg.ChainID)
+		}
 	}
 
 	// Connect to ClickHouse
@@ -77,6 +85,7 @@ func RunIngest() {
 			CHConn:         conn,
 			Cache:          cacheInstance,
 			FetchBatchSize: cfg.FetchBatchSize,
+			Name:           cfg.Name,
 		})
 		if err != nil {
 			log.Fatalf("Failed to create syncer for chain %d: %v", cfg.ChainID, err)

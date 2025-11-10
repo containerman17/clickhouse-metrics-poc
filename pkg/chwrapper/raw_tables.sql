@@ -110,3 +110,12 @@ CREATE TABLE IF NOT EXISTS sync_watermark (
 ) ENGINE = EmbeddedRocksDB
 PRIMARY KEY chain_id;
 
+-- Chain status table - tracks chain metadata and RPC connectivity
+CREATE TABLE IF NOT EXISTS chain_status (
+    chain_id UInt32,
+    name String,
+    last_updated DateTime64(3, 'UTC'),
+    last_block_on_chain UInt64
+) ENGINE = ReplacingMergeTree(last_updated)
+PRIMARY KEY chain_id;
+

@@ -4,6 +4,7 @@
                 "rpcURL": "http://127.0.0.1:9650/ext/bc/C/rpc",
                 "startBlock": 70000000,
                 "fetchBatchSize": 10,
-                "maxConcurrency": 128
+                "maxConcurrency": 128,
+                "name": "C-Chain"
         }
 ]

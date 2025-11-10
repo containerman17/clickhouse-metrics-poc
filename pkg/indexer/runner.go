@@ -35,11 +35,11 @@ type IndexRunner struct {
 
 // NewIndexRunner creates a new indexer runner for a single chain
 func NewIndexRunner(chainId uint32, conn driver.Conn, sqlDir string) (*IndexRunner, error) {
-	// Create tables from watermarks.sql (metrics and indexer_watermarks)
-	watermarksSQLPath := filepath.Join(filepath.Dir(sqlDir), "pkg", "indexer", "watermarks.sql")
-	sqlBytes, err := os.ReadFile(watermarksSQLPath)
+	// Create tables from indexer_tables.sql (metrics and indexer_watermarks)
+	indexerTablesSQLPath := filepath.Join(filepath.Dir(sqlDir), "pkg", "indexer", "indexer_tables.sql")
+	sqlBytes, err := os.ReadFile(indexerTablesSQLPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read watermarks.sql: %w", err)
+		return nil, fmt.Errorf("failed to read indexer_tables.sql: %w", err)
 	}
 
 	// Execute each CREATE TABLE statement
@@ -51,7 +51,7 @@ func NewIndexRunner(chainId uint32, conn driver.Conn, sqlDir string) (*IndexRunn
 		if err := conn.Exec(context.Background(), stmt); err != nil {
 			// Ignore "already exists" errors
 			if !strings.Contains(err.Error(), "already exists") {
-				return nil, fmt.Errorf("failed to create table from watermarks.sql: %w", err)
+				return nil, fmt.Errorf("failed to create table from indexer_tables.sql: %w", err)
 			}
 		}
 	}

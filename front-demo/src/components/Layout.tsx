@@ -29,11 +29,10 @@ function Layout() {
                   )}
                   <NavLink
                     to={item.path}
-                    className={`relative flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium transition-colors z-10 ${
-                      isActive
+                    className={`relative flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium transition-colors z-10 ${isActive
                         ? 'text-white'
                         : 'text-gray-700 hover:text-gray-900'
-                    }`}
+                      }`}
                   >
                     <item.icon size={18} strokeWidth={2} />
                     {item.label}
@@ -46,7 +45,7 @@ function Layout() {
       </div>
 
       {/* Main content */}
-      <div className="pt-24">
+      <div className="pt-24 max-w-7xl mx-auto">
         <AnimatePresence mode="wait">
           <Outlet key={location.pathname} />
         </AnimatePresence>

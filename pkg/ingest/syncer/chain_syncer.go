@@ -31,11 +31,13 @@ type Config struct {
 	FetchBatchSize int          // Blocks per fetch, default 100
 	CHConn         driver.Conn  // ClickHouse connection
 	Cache          *cache.Cache // Cache for RPC calls
+	Name           string       // Chain name for display and tracking
 }
 
 // ChainSyncer manages blockchain sync for a single chain
 type ChainSyncer struct {
 	chainId        uint32
+	chainName      string
 	fetcher        *rpc.Fetcher
 	conn           driver.Conn
 	blockChan      chan []*rpc.NormalizedBlock // Bounded channel for backpressure
@@ -92,6 +94,7 @@ func NewChainSyncer(cfg Config) (*ChainSyncer, error) {
 
 	cs := &ChainSyncer{
 		chainId:        cfg.ChainID,
+		chainName:      cfg.Name,
 		fetcher:        fetcher,
 		conn:           cfg.CHConn,
 		blockChan:      make(chan []*rpc.NormalizedBlock, BufferSize),
@@ -155,6 +158,11 @@ func (cs *ChainSyncer) Start() error {
 	}
 
 	log.Printf("[Chain %d] Latest block on chain: %d", cs.chainId, latestBlock)
+
+	// Initialize chain status in database
+	if err := chwrapper.UpsertChainStatus(cs.conn, cs.chainId, cs.chainName, uint64(latestBlock)); err != nil {
+		return fmt.Errorf("failed to upsert chain status: %w", err)
+	}
 
 	// Start producer (fetcher) goroutine
 	cs.wg.Add(1)
@@ -230,6 +238,11 @@ func (cs *ChainSyncer) fetcherLoop(startBlock, latestBlock int64) {
 				if err != nil {
 					log.Printf("[Chain %d] Error getting latest block: %v", cs.chainId, err)
 					continue
+				}
+
+				// Update chain status with latest block from RPC
+				if err := chwrapper.UpdateLatestBlock(cs.conn, cs.chainId, uint64(newLatest)); err != nil {
+					log.Printf("[Chain %d] Error updating chain status: %v", cs.chainId, err)
 				}
 
 				if newLatest > latestBlock {
