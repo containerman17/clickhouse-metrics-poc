@@ -11,7 +11,7 @@ const clickhouse = createClient({
 interface ChainSyncData {
   chain_id: number;
   name: string;
-  last_updated: string;
+  last_updated: number; // Unix timestamp
   last_block_on_chain: number;
   watermark_block: number | null;
 }
@@ -23,14 +23,14 @@ function SyncStatus() {
       const result = await clickhouse.query({
         query: `
           SELECT 
-            cs.chain_id,
-            cs.name,
-            cs.last_updated,
-            cs.last_block_on_chain,
+            chain_status.chain_id,
+            chain_status.name,
+            toUnixTimestamp(chain_status.last_updated) as last_updated,
+            chain_status.last_block_on_chain,
             sw.block_number as watermark_block
-          FROM chain_status cs
-          LEFT JOIN sync_watermark sw ON cs.chain_id = sw.chain_id
-          ORDER BY cs.chain_id
+          FROM chain_status FINAL
+          LEFT JOIN sync_watermark sw ON chain_status.chain_id = sw.chain_id
+          ORDER BY chain_status.chain_id
         `,
         format: 'JSONEachRow',
       });
@@ -47,35 +47,25 @@ function SyncStatus() {
     return 'red';
   };
 
-  const getLastUpdatedHealth = (timestamp: string) => {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffSec = Math.floor(diffMs / 1000);
+  const getLastUpdatedHealth = (unixTimestamp: number) => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const diffSec = nowSec - unixTimestamp;
 
     if (diffSec < 60) return 'green';  // < 1 minute
     if (diffSec < 3600) return 'yellow';  // < 1 hour
     return 'red';  // > 1 hour
   };
 
-  const formatTimestamp = (timestamp: string) => {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffSec = Math.floor(diffMs / 1000);
+  const formatTimestamp = (unixTimestamp: number) => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const diffSec = nowSec - unixTimestamp;
     const diffMin = Math.floor(diffSec / 60);
     const diffHour = Math.floor(diffMin / 60);
 
     if (diffSec < 60) return `${diffSec}s ago`;
     if (diffMin < 60) return `${diffMin}m ago`;
     if (diffHour < 24) return `${diffHour}h ago`;
-    return date.toLocaleString();
-  };
-
-  const formatNumber = (num: number) => {
-    if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(2)}M`;
-    if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
-    return num.toLocaleString();
+    return new Date(unixTimestamp * 1000).toLocaleString();
   };
 
   const getHealthDot = (health: string) => {
@@ -191,7 +181,7 @@ function SyncStatus() {
                         <div className="flex items-center justify-end gap-2">
                           <div className={`w-2 h-2 rounded-full ${getHealthDot(blocksHealth)}`} />
                           <span className="text-sm font-semibold text-gray-900">
-                            {blocksBehind !== null ? formatNumber(blocksBehind) : '—'}
+                            {blocksBehind !== null ? blocksBehind.toLocaleString() : '—'}
                           </span>
                         </div>
                       </td>

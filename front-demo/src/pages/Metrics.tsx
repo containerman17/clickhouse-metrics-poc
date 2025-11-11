@@ -43,7 +43,7 @@ function Metrics() {
     queryKey: ['chains'],
     queryFn: async () => {
       const result = await clickhouse.query({
-        query: 'SELECT chain_id, name FROM chain_status',
+        query: 'SELECT chain_id, name FROM chain_status FINAL',
         format: 'JSONEachRow',
       });
       const data = await result.json<Chain>();

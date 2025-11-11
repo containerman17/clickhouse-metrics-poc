@@ -241,7 +241,7 @@ func (cs *ChainSyncer) fetcherLoop(startBlock, latestBlock int64) {
 				}
 
 				// Update chain status with latest block from RPC
-				if err := chwrapper.UpdateLatestBlock(cs.conn, cs.chainId, uint64(newLatest)); err != nil {
+				if err := chwrapper.UpdateLatestBlock(cs.conn, cs.chainId, cs.chainName, uint64(newLatest)); err != nil {
 					log.Printf("[Chain %d] Error updating chain status: %v", cs.chainId, err)
 				}
 
