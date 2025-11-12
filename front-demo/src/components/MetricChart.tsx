@@ -67,7 +67,7 @@ function MetricChart({ metricName, data, granularity }: MetricChartProps) {
 
         const opts: uPlot.Options = {
             width: chartRef.current.offsetWidth,
-            height: 300,
+            height: 350,
             padding: [10, 10, 0, 5], // [top, right, bottom, left] - add padding for axes
             scales: {
                 x: {
@@ -97,6 +97,8 @@ function MetricChart({ metricName, data, granularity }: MetricChartProps) {
                             return formatDate(dateStr, granularity);
                         });
                     },
+                    size: 90, // Reserve more vertical space for angled labels
+                    rotate: -45, // Angle labels at -45 degrees
                 },
                 {
                     stroke: '#6b7280',
@@ -125,9 +127,9 @@ function MetricChart({ metricName, data, granularity }: MetricChartProps) {
         // Handle resize
         const resizeObserver = new ResizeObserver(() => {
             if (plotRef.current && chartRef.current) {
-                plotRef.current.setSize({
-                    width: chartRef.current.offsetWidth,
-                    height: 300
+                plotRef.current.setSize({ 
+                    width: chartRef.current.offsetWidth, 
+                    height: 350 
                 });
             }
         });

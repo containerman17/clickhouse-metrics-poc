@@ -6,8 +6,11 @@ import (
 	"clickhouse-metrics-poc/pkg/pchainrpc"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/dustin/go-humanize"
@@ -26,6 +29,17 @@ func RunCache() {
 		log.Fatal("No chain configurations found in config.yaml")
 	}
 
+	// Set up signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	shutdown := make(chan struct{})
+
+	go func() {
+		sig := <-sigChan
+		log.Printf("Received signal %v, initiating graceful shutdown...", sig)
+		close(shutdown)
+	}()
+
 	var wg sync.WaitGroup
 
 	// Start a cacher for each chain
@@ -37,9 +51,9 @@ func RunCache() {
 			var err error
 			switch chainCfg.VM {
 			case "evm":
-				err = runEVMCache(chainCfg)
+				err = runEVMCache(chainCfg, shutdown)
 			case "p":
-				err = runPChainCache(chainCfg)
+				err = runPChainCache(chainCfg, shutdown)
 			default:
 				log.Printf("[Chain %d] Unsupported VM type: %s", chainCfg.ChainID, chainCfg.VM)
 				return
@@ -52,10 +66,10 @@ func RunCache() {
 	}
 
 	wg.Wait()
-	log.Println("Cache complete!")
+	log.Println("Shutdown complete!")
 }
 
-func runEVMCache(cfg ChainConfig) error {
+func runEVMCache(cfg ChainConfig, shutdown <-chan struct{}) error {
 	// Defaults
 	maxConcurrency := cfg.MaxConcurrency
 	if maxConcurrency == 0 {
@@ -94,6 +108,7 @@ func runEVMCache(cfg ChainConfig) error {
 		DebugBatchSize: 1,
 		Cache:          cacheInstance,
 	})
+	defer fetcher.Close()
 
 	// Get latest block from RPC
 	latestBlock, err := fetcher.GetLatestBlock()
@@ -116,9 +131,49 @@ func runEVMCache(cfg ChainConfig) error {
 	endBlock := latestBlock
 
 	if startBlock > endBlock {
-		log.Printf("[Chain %d - %s] Already cached up to block %d (target: %d). Nothing to do!",
-			cfg.ChainID, cfg.Name, checkpoint, endBlock)
-		return nil
+		log.Printf("[Chain %d - %s] Already caught up to block %d, entering continuous sync mode...",
+			cfg.ChainID, cfg.Name, endBlock)
+
+		// Enter continuous sync mode directly
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		currentHead := endBlock
+		for {
+			select {
+			case <-shutdown:
+				log.Printf("[Chain %d - %s] Shutdown signal received, stopping sync", cfg.ChainID, cfg.Name)
+				return nil
+
+			case <-ticker.C:
+				newLatest, err := fetcher.GetLatestBlock()
+				if err != nil {
+					log.Printf("[Chain %d - %s] Error checking for new blocks: %v", cfg.ChainID, cfg.Name, err)
+					continue
+				}
+
+				if newLatest > currentHead {
+					newBlocksCount := newLatest - currentHead
+					log.Printf("[Chain %d - %s] Found %d new block(s), syncing %d to %d...",
+						cfg.ChainID, cfg.Name, newBlocksCount, currentHead+1, newLatest)
+
+					newBlocks, err := fetcher.FetchBlockRange(currentHead+1, newLatest)
+					if err != nil {
+						log.Printf("[Chain %d - %s] Error fetching new blocks: %v", cfg.ChainID, cfg.Name, err)
+						continue
+					}
+
+					if err := cacheInstance.SetCheckpoint(newLatest); err != nil {
+						log.Printf("[Chain %d - %s] Failed to save checkpoint at block %d: %v",
+							cfg.ChainID, cfg.Name, newLatest, err)
+					}
+
+					currentHead = newLatest
+					log.Printf("[Chain %d - %s] ✓ Synced %d new block(s), now at block %d",
+						cfg.ChainID, cfg.Name, len(newBlocks), currentHead)
+				}
+			}
+		}
 	}
 
 	totalBlocks := endBlock - originalStartBlock + 1
@@ -225,27 +280,71 @@ func runEVMCache(cfg ChainConfig) error {
 	fetchWg.Wait()
 	close(done)
 
-	// Save final checkpoint
+	// Save checkpoint after initial sync
 	if err := cacheInstance.SetCheckpoint(endBlock); err != nil {
-		log.Printf("[Chain %d - %s] Failed to save final checkpoint: %v", cfg.ChainID, cfg.Name, err)
+		log.Printf("[Chain %d - %s] Failed to save checkpoint: %v", cfg.ChainID, cfg.Name, err)
 	} else {
-		log.Printf("[Chain %d - %s] Final checkpoint saved at block %d", cfg.ChainID, cfg.Name, endBlock)
+		log.Printf("[Chain %d - %s] Checkpoint saved at block %d", cfg.ChainID, cfg.Name, endBlock)
 	}
 
 	elapsed := time.Since(startTime)
 	finalCount := blocksCached.Load()
 	avgRate := float64(finalCount) / elapsed.Seconds()
 
-	log.Printf("[Chain %d - %s] ✓ Cached %d blocks in %s (avg %.1f blocks/sec)",
+	log.Printf("[Chain %d - %s] ✓ Initial sync complete: cached %d blocks in %s (avg %.1f blocks/sec)",
 		cfg.ChainID, cfg.Name, finalCount, elapsed.Round(time.Second), avgRate)
 
 	// Show cache metrics
 	log.Printf("[Chain %d - %s] Cache metrics:\n%s", cfg.ChainID, cfg.Name, cacheInstance.GetMetrics())
 
-	return nil
+	// Enter continuous sync mode
+	log.Printf("[Chain %d - %s] Entering continuous sync mode (polling every 5 seconds)...", cfg.ChainID, cfg.Name)
+	currentHead := endBlock
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-shutdown:
+			log.Printf("[Chain %d - %s] Shutdown signal received, stopping sync", cfg.ChainID, cfg.Name)
+			return nil
+
+		case <-ticker.C:
+			// Check for new blocks
+			newLatest, err := fetcher.GetLatestBlock()
+			if err != nil {
+				log.Printf("[Chain %d - %s] Error checking for new blocks: %v", cfg.ChainID, cfg.Name, err)
+				continue
+			}
+
+			if newLatest > currentHead {
+				newBlocksCount := newLatest - currentHead
+				log.Printf("[Chain %d - %s] Found %d new block(s), syncing %d to %d...",
+					cfg.ChainID, cfg.Name, newBlocksCount, currentHead+1, newLatest)
+
+				// Fetch new blocks
+				newBlocks, err := fetcher.FetchBlockRange(currentHead+1, newLatest)
+				if err != nil {
+					log.Printf("[Chain %d - %s] Error fetching new blocks: %v", cfg.ChainID, cfg.Name, err)
+					continue
+				}
+
+				// Update checkpoint
+				if err := cacheInstance.SetCheckpoint(newLatest); err != nil {
+					log.Printf("[Chain %d - %s] Failed to save checkpoint at block %d: %v",
+						cfg.ChainID, cfg.Name, newLatest, err)
+				}
+
+				currentHead = newLatest
+				log.Printf("[Chain %d - %s] ✓ Synced %d new block(s), now at block %d",
+					cfg.ChainID, cfg.Name, len(newBlocks), currentHead)
+			}
+		}
+	}
 }
 
-func runPChainCache(cfg ChainConfig) error {
+func runPChainCache(cfg ChainConfig, shutdown <-chan struct{}) error {
 	// Defaults
 	maxConcurrency := cfg.MaxConcurrency
 	if maxConcurrency == 0 {
@@ -283,6 +382,7 @@ func runPChainCache(cfg ChainConfig) error {
 		BatchSize:      fetchBatchSize,
 		Cache:          cacheInstance,
 	})
+	defer fetcher.Close()
 
 	// Get latest block from RPC
 	latestBlock, err := fetcher.GetLatestBlock()
@@ -305,9 +405,49 @@ func runPChainCache(cfg ChainConfig) error {
 	endBlock := latestBlock
 
 	if startBlock > endBlock {
-		log.Printf("[Chain %d - %s] Already cached up to block %d (target: %d). Nothing to do!",
-			cfg.ChainID, cfg.Name, checkpoint, endBlock)
-		return nil
+		log.Printf("[Chain %d - %s] Already caught up to block %d, entering continuous sync mode...",
+			cfg.ChainID, cfg.Name, endBlock)
+
+		// Enter continuous sync mode directly
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		currentHead := endBlock
+		for {
+			select {
+			case <-shutdown:
+				log.Printf("[Chain %d - %s] Shutdown signal received, stopping sync", cfg.ChainID, cfg.Name)
+				return nil
+
+			case <-ticker.C:
+				newLatest, err := fetcher.GetLatestBlock()
+				if err != nil {
+					log.Printf("[Chain %d - %s] Error checking for new blocks: %v", cfg.ChainID, cfg.Name, err)
+					continue
+				}
+
+				if newLatest > currentHead {
+					newBlocksCount := newLatest - currentHead
+					log.Printf("[Chain %d - %s] Found %d new block(s), syncing %d to %d...",
+						cfg.ChainID, cfg.Name, newBlocksCount, currentHead+1, newLatest)
+
+					newBlocks, err := fetcher.FetchBlockRange(currentHead+1, newLatest)
+					if err != nil {
+						log.Printf("[Chain %d - %s] Error fetching new blocks: %v", cfg.ChainID, cfg.Name, err)
+						continue
+					}
+
+					if err := cacheInstance.SetCheckpoint(newLatest); err != nil {
+						log.Printf("[Chain %d - %s] Failed to save checkpoint at block %d: %v",
+							cfg.ChainID, cfg.Name, newLatest, err)
+					}
+
+					currentHead = newLatest
+					log.Printf("[Chain %d - %s] ✓ Synced %d new block(s), now at block %d",
+						cfg.ChainID, cfg.Name, len(newBlocks), currentHead)
+				}
+			}
+		}
 	}
 
 	totalBlocks := endBlock - originalStartBlock + 1
@@ -414,22 +554,66 @@ func runPChainCache(cfg ChainConfig) error {
 	fetchWg.Wait()
 	close(done)
 
-	// Save final checkpoint
+	// Save checkpoint after initial sync
 	if err := cacheInstance.SetCheckpoint(endBlock); err != nil {
-		log.Printf("[Chain %d - %s] Failed to save final checkpoint: %v", cfg.ChainID, cfg.Name, err)
+		log.Printf("[Chain %d - %s] Failed to save checkpoint: %v", cfg.ChainID, cfg.Name, err)
 	} else {
-		log.Printf("[Chain %d - %s] Final checkpoint saved at block %d", cfg.ChainID, cfg.Name, endBlock)
+		log.Printf("[Chain %d - %s] Checkpoint saved at block %d", cfg.ChainID, cfg.Name, endBlock)
 	}
 
 	elapsed := time.Since(startTime)
 	finalCount := blocksCached.Load()
 	avgRate := float64(finalCount) / elapsed.Seconds()
 
-	log.Printf("[Chain %d - %s] ✓ Cached %d blocks in %s (avg %.1f blocks/sec)",
+	log.Printf("[Chain %d - %s] ✓ Initial sync complete: cached %d blocks in %s (avg %.1f blocks/sec)",
 		cfg.ChainID, cfg.Name, finalCount, elapsed.Round(time.Second), avgRate)
 
 	// Show cache metrics
 	log.Printf("[Chain %d - %s] Cache metrics:\n%s", cfg.ChainID, cfg.Name, cacheInstance.GetMetrics())
 
-	return nil
+	// Enter continuous sync mode
+	log.Printf("[Chain %d - %s] Entering continuous sync mode (polling every 5 seconds)...", cfg.ChainID, cfg.Name)
+	currentHead := endBlock
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-shutdown:
+			log.Printf("[Chain %d - %s] Shutdown signal received, stopping sync", cfg.ChainID, cfg.Name)
+			return nil
+
+		case <-ticker.C:
+			// Check for new blocks
+			newLatest, err := fetcher.GetLatestBlock()
+			if err != nil {
+				log.Printf("[Chain %d - %s] Error checking for new blocks: %v", cfg.ChainID, cfg.Name, err)
+				continue
+			}
+
+			if newLatest > currentHead {
+				newBlocksCount := newLatest - currentHead
+				log.Printf("[Chain %d - %s] Found %d new block(s), syncing %d to %d...",
+					cfg.ChainID, cfg.Name, newBlocksCount, currentHead+1, newLatest)
+
+				// Fetch new blocks
+				newBlocks, err := fetcher.FetchBlockRange(currentHead+1, newLatest)
+				if err != nil {
+					log.Printf("[Chain %d - %s] Error fetching new blocks: %v", cfg.ChainID, cfg.Name, err)
+					continue
+				}
+
+				// Update checkpoint
+				if err := cacheInstance.SetCheckpoint(newLatest); err != nil {
+					log.Printf("[Chain %d - %s] Failed to save checkpoint at block %d: %v",
+						cfg.ChainID, cfg.Name, newLatest, err)
+				}
+
+				currentHead = newLatest
+				log.Printf("[Chain %d - %s] ✓ Synced %d new block(s), now at block %d",
+					cfg.ChainID, cfg.Name, len(newBlocks), currentHead)
+			}
+		}
+	}
 }

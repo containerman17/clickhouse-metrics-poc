@@ -39,6 +39,8 @@ type Fetcher struct {
 
 	// Cache writer
 	cacheWriteCh chan cacheWrite
+	cacheWg      sync.WaitGroup
+	done         chan struct{}
 
 	// HTTP client
 	httpClient *http.Client
@@ -98,6 +100,7 @@ func NewFetcher(opts FetcherOptions) *Fetcher {
 		rpcLimit:       make(chan struct{}, opts.MaxConcurrency),
 		debugLimit:     make(chan struct{}, opts.MaxConcurrency),
 		cacheWriteCh:   make(chan cacheWrite, 1000), // Buffered channel
+		done:           make(chan struct{}),
 		httpClient: &http.Client{
 			Timeout:   5 * time.Minute,
 			Transport: transport,
@@ -108,6 +111,7 @@ func NewFetcher(opts FetcherOptions) *Fetcher {
 	if f.cache != nil {
 		numWriters := 4 // Dedicated cache write workers
 		for i := 0; i < numWriters; i++ {
+			f.cacheWg.Add(1)
 			go f.cacheWriter()
 		}
 	}
@@ -117,14 +121,23 @@ func NewFetcher(opts FetcherOptions) *Fetcher {
 
 // cacheWriter runs in background goroutines to write blocks to cache
 func (f *Fetcher) cacheWriter() {
-	for cw := range f.cacheWriteCh {
-		data, err := json.Marshal(cw.block)
-		if err != nil {
-			continue // Silent fail for cache writes
+	defer f.cacheWg.Done()
+	for {
+		select {
+		case <-f.done:
+			return
+		case cw, ok := <-f.cacheWriteCh:
+			if !ok {
+				return
+			}
+			data, err := json.Marshal(cw.block)
+			if err != nil {
+				continue // Silent fail for cache writes
+			}
+			_, _ = f.cache.GetCompleteBlock(cw.blockNum, func() ([]byte, error) {
+				return data, nil
+			})
 		}
-		_, _ = f.cache.GetCompleteBlock(cw.blockNum, func() ([]byte, error) {
-			return data, nil
-		})
 	}
 }
 
@@ -954,4 +967,15 @@ func isPrecompileError(err error) bool {
 		return false
 	}
 	return strings.Contains(err.Error(), "incorrect number of top-level calls")
+}
+
+// Close stops all background goroutines and cleans up resources
+func (f *Fetcher) Close() {
+	if f.done != nil {
+		close(f.done)
+	}
+	if f.cacheWriteCh != nil {
+		close(f.cacheWriteCh)
+	}
+	f.cacheWg.Wait()
 }

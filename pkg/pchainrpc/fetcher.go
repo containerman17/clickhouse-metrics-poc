@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"reflect"
 	"sync"
 	"time"
 
@@ -477,6 +478,14 @@ func (f *Fetcher) normalizeBlock(blk block.Block) (*NormalizedBlock, error) {
 
 // normalizeTx normalizes a transaction into storage format
 func (f *Fetcher) normalizeTx(tx *txs.Tx, blockHeight uint64, blockTime time.Time) (*NormalizedTx, error) {
+
+	unsignedTxBytes, err := json.Marshal(tx.Unsigned)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("unsignedTx", string(unsignedTxBytes), reflect.TypeOf(tx.Unsigned))
+	panic("test")
+
 	if tx == nil || tx.Unsigned == nil {
 		return nil, fmt.Errorf("nil transaction or unsigned tx")
 	}
@@ -609,4 +618,10 @@ func (f *Fetcher) normalizeTx(tx *txs.Tx, blockHeight uint64, blockTime time.Tim
 	}
 
 	return normalized, nil
+}
+
+// Close stops all background goroutines and cleans up resources
+func (f *Fetcher) Close() {
+	// P-Chain fetcher doesn't have background goroutines currently,
+	// but this method is provided for consistency and future-proofing
 }
