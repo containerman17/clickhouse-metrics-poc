@@ -1,14 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { createClient } from '@clickhouse/client-web';
 import PageTransition from '../components/PageTransition';
 import AiHelpButton from '../components/AiHelpButton';
 import { Play, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
-
-const clickhouse = createClient({
-  url: 'http://localhost:8123',
-  username: "anonymous_heavy",
-});
+import { useClickhouseUrl } from '../hooks/useClickhouseUrl';
 
 const PAGE_SIZE = 200;
 const STORAGE_KEY = 'customSqlQuery';
@@ -48,6 +44,12 @@ function CustomSQL() {
   });
   const [currentPage, setCurrentPage] = useState(1);
   const [result, setResult] = useState<QueryResult | null>(null);
+  const { url } = useClickhouseUrl();
+
+  const clickhouse = useMemo(() => createClient({
+    url,
+    username: "anonymous_heavy",
+  }), [url]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, query);

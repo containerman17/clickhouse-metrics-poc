@@ -1,14 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 import { createClient } from '@clickhouse/client-web';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import PageTransition from '../components/PageTransition';
 import MetricChart from '../components/MetricChart';
-
-const clickhouse = createClient({
-  url: 'http://localhost:8123',
-  username: "anonymous",
-});
+import { useClickhouseUrl } from '../hooks/useClickhouseUrl';
+import { useSyncStatus } from '../hooks/useSyncStatus';
 
 interface Chain {
   chain_id: number;
@@ -38,13 +35,20 @@ function Metrics() {
   const navigate = useNavigate();
   const [metricNames, setMetricNames] = useState<string[]>([]);
   const [loadingMetricsList, setLoadingMetricsList] = useState(false);
+  const { url } = useClickhouseUrl();
+  const { chains: syncStatusChains } = useSyncStatus();
 
   const selectedChainId = chainId ? parseInt(chainId) : 43114;
   const selectedGranularity = (granularity as Granularity) || 'hour';
 
+  const clickhouse = useMemo(() => createClient({
+    url,
+    username: "anonymous",
+  }), [url]);
+
   // Cache chains for 5 minutes
   const { data: chains, isLoading, error } = useQuery<Chain[]>({
-    queryKey: ['chains'],
+    queryKey: ['chains', url],
     queryFn: async () => {
       const result = await clickhouse.query({
         query: 'SELECT chain_id, name FROM chain_status FINAL WHERE chain_id !=0 ',
@@ -123,6 +127,8 @@ function Metrics() {
               <div className="space-y-2">
                 {chains.map((chain) => {
                   const isSelected = selectedChainId === chain.chain_id;
+                  const syncStatus = syncStatusChains?.find(c => c.chain_id === chain.chain_id);
+                  const needsWarning = syncStatus && syncStatus.syncPercentage < 99.9;
                   return (
                     <button
                       key={chain.chain_id}
@@ -135,6 +141,11 @@ function Metrics() {
                       <div className="flex-1">
                         <div className={`font-medium ${isSelected ? 'text-blue-900' : 'text-gray-900'}`}>
                           {chain.name}
+                          {needsWarning && (
+                            <span className="ml-2 text-xs font-semibold text-yellow-600">
+                              {syncStatus.syncPercentage.toFixed(1)}% synced
+                            </span>
+                          )}
                         </div>
                         <div className={`text-sm ${isSelected ? 'text-blue-600' : 'text-gray-500'}`}>
                           Chain ID: {chain.chain_id}
@@ -194,6 +205,8 @@ function Metrics() {
                 metricName={metricName}
                 chainId={selectedChainId}
                 granularity={selectedGranularity}
+                clickhouse={clickhouse}
+                url={url}
               />
             ))}
           </div>
@@ -215,14 +228,18 @@ interface MetricQueryResult {
 function MetricChartLoader({
   metricName,
   chainId,
-  granularity
+  granularity,
+  clickhouse,
+  url
 }: {
   metricName: string;
   chainId: number;
   granularity: string;
+  clickhouse: ReturnType<typeof createClient>;
+  url: string;
 }) {
   const { data, isLoading, error } = useQuery<MetricQueryResult>({
-    queryKey: ['metric', chainId, granularity, metricName],
+    queryKey: ['metric', chainId, granularity, metricName, url],
     queryFn: async () => {
       const sqlQuery = `SELECT chain_id, metric_name, granularity, period, value, computed_at 
                 FROM metrics 

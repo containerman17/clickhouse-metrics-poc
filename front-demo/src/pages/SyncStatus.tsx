@@ -2,19 +2,9 @@ import { useQuery } from '@tanstack/react-query';
 import { createClient } from '@clickhouse/client-web';
 import PageTransition from '../components/PageTransition';
 import { RefreshCw } from 'lucide-react';
-
-const clickhouse = createClient({
-  url: 'http://localhost:8123',
-  username: "anonymous",
-});
-
-interface ChainSyncData {
-  chain_id: number;
-  name: string;
-  last_updated: number; // Unix timestamp
-  last_block_on_chain: number;
-  watermark_block: number | null;
-}
+import { useMemo } from 'react';
+import { useClickhouseUrl } from '../hooks/useClickhouseUrl';
+import { useSyncStatus } from '../hooks/useSyncStatus';
 
 interface TableSize {
   table: string;
@@ -23,31 +13,18 @@ interface TableSize {
 }
 
 function SyncStatus() {
-  const { data: chains, isLoading, error, refetch, isFetching } = useQuery<ChainSyncData[]>({
-    queryKey: ['syncStatus'],
-    queryFn: async () => {
-      const result = await clickhouse.query({
-        query: `
-          SELECT 
-            chain_status.chain_id,
-            chain_status.name,
-            toUnixTimestamp(chain_status.last_updated) as last_updated,
-            chain_status.last_block_on_chain,
-            sw.block_number as watermark_block
-          FROM chain_status FINAL
-          LEFT JOIN sync_watermark sw ON chain_status.chain_id = sw.chain_id
-          ORDER BY chain_status.chain_id
-        `,
-        format: 'JSONEachRow',
-      });
-      const data = await result.json<ChainSyncData>();
-      return data as ChainSyncData[];
-    },
-    refetchInterval: 60000,
-  });
+  const { url } = useClickhouseUrl();
+
+  const clickhouse = useMemo(() => createClient({
+    url,
+    username: "anonymous",
+  }), [url]);
+
+  // Use shared sync status hook
+  const { chains, isLoading, error, refetch, isFetching } = useSyncStatus();
 
   const { data: tableSizes, isLoading: isLoadingTables, error: tableSizesError } = useQuery<TableSize[]>({
-    queryKey: ['tableSizes'],
+    queryKey: ['tableSizes', url],
     queryFn: async () => {
       const result = await clickhouse.query({
         query: `
@@ -191,14 +168,8 @@ function SyncStatus() {
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {chains.map((chain, idx) => {
-                  const blocksBehind = chain.watermark_block !== null
-                    ? chain.last_block_on_chain - chain.watermark_block
-                    : null;
-                  const blocksHealth = getBlocksBehindHealth(blocksBehind);
+                  const blocksHealth = getBlocksBehindHealth(chain.blocksBehind);
                   const updatedHealth = getLastUpdatedHealth(chain.last_updated);
-                  const syncPercentage = chain.watermark_block !== null
-                    ? (chain.watermark_block / chain.last_block_on_chain) * 100
-                    : 0;
 
                   return (
                     <tr
@@ -225,13 +196,13 @@ function SyncStatus() {
                         <div className="flex items-center justify-end gap-2">
                           <div className={`w-2 h-2 rounded-full ${getHealthDot(blocksHealth)}`} />
                           <span className="text-sm font-semibold text-gray-900">
-                            {blocksBehind !== null ? blocksBehind.toLocaleString() : '—'}
+                            {chain.blocksBehind !== null ? chain.blocksBehind.toLocaleString() : '—'}
                           </span>
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right">
                         <div className="text-sm text-gray-600">
-                          {syncPercentage > 0 ? `${syncPercentage.toFixed(2)}%` : '—'}
+                          {chain.syncPercentage > 0 ? `${chain.syncPercentage.toFixed(2)}%` : '—'}
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">

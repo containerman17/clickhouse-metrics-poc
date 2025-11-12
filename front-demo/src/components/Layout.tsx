@@ -1,9 +1,11 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { BarChart3, FileCode, RefreshCw } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useClickhouseUrl } from '../hooks/useClickhouseUrl';
 
 function Layout() {
   const location = useLocation();
+  const { url, setUrl } = useClickhouseUrl();
   const menuItems = [
     { path: '/evm-metrics/43114/hour', pathPrefix: '/evm-metrics', label: 'EVM Metrics', icon: BarChart3 },
     { path: '/custom-sql', pathPrefix: '/custom-sql', label: 'Custom SQL', icon: FileCode },
@@ -30,8 +32,8 @@ function Layout() {
                   <NavLink
                     to={item.path}
                     className={`relative flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium transition-colors z-10 ${isActive
-                        ? 'text-white'
-                        : 'text-gray-700 hover:text-gray-900'
+                      ? 'text-white'
+                      : 'text-gray-700 hover:text-gray-900'
                       }`}
                   >
                     <item.icon size={18} strokeWidth={2} />
@@ -40,6 +42,22 @@ function Layout() {
                 </li>
               );
             })}
+
+            {/* Server Selector */}
+            <li className="ml-2 pl-2 border-l border-gray-300">
+              <select
+                value={url}
+                onChange={(e) => {
+                  setUrl(e.target.value);
+                  // Refresh page to ensure clean state with new server
+                  window.location.reload();
+                }}
+                className="px-3 py-2 text-sm font-medium text-gray-700 bg-transparent border-none rounded-full hover:bg-gray-100/50 cursor-pointer focus:outline-none focus:ring-2 focus:ring-gray-900/20"
+              >
+                <option value="https://node01-8123.containerman.me/">PoC Server</option>
+                <option value="http://localhost:8123">localhost</option>
+              </select>
+            </li>
           </ul>
         </nav>
       </div>
