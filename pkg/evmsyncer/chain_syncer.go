@@ -185,6 +185,19 @@ func (cs *ChainSyncer) Start() error {
 
 	// Start indexer loop (skip in fast mode)
 	if !cs.fast {
+		// Initialize indexer with latest known block if we have one
+		if cs.maxBlockBlocks > 0 {
+			// Query block time for the latest block
+			blockTime, err := cs.getBlockTime(cs.maxBlockBlocks)
+			if err != nil {
+				log.Printf("[Chain %d] Warning: failed to get block time for block %d: %v", cs.chainId, cs.maxBlockBlocks, err)
+				// Use current time as fallback
+				blockTime = time.Now().UTC()
+			}
+			cs.indexerRunner.OnBlock(uint64(cs.maxBlockBlocks), blockTime)
+			log.Printf("[Chain %d] Initialized indexer with block %d", cs.chainId, cs.maxBlockBlocks)
+		}
+
 		cs.wg.Add(1)
 		go func() {
 			defer cs.wg.Done()
@@ -207,6 +220,20 @@ func (cs *ChainSyncer) Stop() {
 // Wait blocks until syncer completes
 func (cs *ChainSyncer) Wait() {
 	cs.wg.Wait()
+}
+
+// getBlockTime queries the block time for a specific block from the database
+func (cs *ChainSyncer) getBlockTime(blockNum uint32) (time.Time, error) {
+	ctx := context.Background()
+	query := "SELECT block_time FROM raw_blocks WHERE chain_id = ? AND block_number = ? LIMIT 1"
+
+	row := cs.conn.QueryRow(ctx, query, cs.chainId, blockNum)
+	var blockTime time.Time
+	if err := row.Scan(&blockTime); err != nil {
+		return time.Time{}, fmt.Errorf("failed to query block time: %w", err)
+	}
+
+	return blockTime, nil
 }
 
 // getStartingBlock determines where to start syncing from
