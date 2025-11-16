@@ -1,0 +1,178 @@
+-- ERC-20 Balance Tracking - 2 Stage Process
+-- Stage 1: erc20_balance_changes table (accumulates deposits/withdrawals)
+-- Stage 2: erc20_balances view (calculates final balances)
+--
+-- Uses SummingMergeTree to automatically sum deposits/withdrawals during merges
+-- and SimpleAggregateFunction(max) to track the highest processed block.
+-- Note: Retrying the same block range will double-count amounts (not idempotent)
+-- but this is acceptable for the last batch retry pattern.
+
+-- ========================================================================
+-- STAGE 1: CREATE BALANCE CHANGES TABLE
+-- ========================================================================
+-- ORDER BY is optimized for token-centric queries (e.g. "all holders of token X")
+-- If you mainly query by wallet instead, swap token and wallet in ORDER BY
+
+CREATE TABLE IF NOT EXISTS erc20_balance_changes (
+    chain_id UInt32,
+    wallet FixedString(20),
+    token FixedString(20),
+    deposits UInt256,   -- summed across all inserts
+    withdrawals UInt256, -- summed across all inserts
+    last_block SimpleAggregateFunction(max, UInt32),  -- tracks max processed block
+    computed_at SimpleAggregateFunction(max, DateTime64(3, 'UTC'))
+) ENGINE = SummingMergeTree((deposits, withdrawals))
+ORDER BY (chain_id, token, wallet);
+
+-- ========================================================================
+-- STAGE 2: CREATE BALANCE VIEW
+-- ========================================================================
+
+CREATE OR REPLACE VIEW erc20_balances AS
+SELECT 
+    chain_id,
+    wallet,
+    token,
+    sum(deposits) as total_in,
+    sum(withdrawals) as total_out,
+    sum(deposits) - sum(withdrawals) as balance,
+    max(last_block) as last_updated_block
+FROM erc20_balance_changes  -- No FINAL needed with SummingMergeTree + aggregation
+GROUP BY chain_id, wallet, token;
+
+-- ========================================================================
+-- INSERT: Process balance changes for block range
+-- ========================================================================
+-- First, query the max processed block:
+-- SELECT max(last_block) as max_processed FROM erc20_balance_changes 
+-- WHERE chain_id = @chain_id;
+--
+-- Then run this with parameters: @chain_id, @from_block (max_processed+1), @to_block
+-- Note: Retrying the same range will double-count amounts (not idempotent)
+
+INSERT INTO erc20_balance_changes (chain_id, wallet, token, deposits, withdrawals, last_block, computed_at)
+SELECT 
+    @chain_id as chain_id,
+    wallet,
+    token,
+    sum(deposits) as deposits,
+    sum(withdrawals) as withdrawals,
+    @to_block as last_block,
+    now64(3) as computed_at
+FROM (
+    -- ========================================================================
+    -- INCOMING BALANCE CHANGES (DEPOSITS)
+    -- ========================================================================
+    
+    -- Standard ERC20 incoming transfers (including mints from 0x0)
+    SELECT 
+        substring(topic2, 13, 20) as wallet,
+        address as token,
+        reinterpretAsUInt256(reverse(data)) as deposits,
+        toUInt256(0) as withdrawals
+    FROM raw_logs
+    WHERE chain_id = @chain_id
+      AND block_number >= @from_block
+      AND block_number <= @to_block
+      AND topic0 = unhex('ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef')  -- Transfer
+      AND length(data) = 32
+      AND topic2 IS NOT NULL
+      
+    UNION ALL
+    
+    -- Wrapped token deposits (WAVAX, WETH, etc)
+    SELECT 
+        substring(topic1, 13, 20) as wallet,
+        address as token,
+        reinterpretAsUInt256(reverse(data)) as deposits,
+        toUInt256(0) as withdrawals
+    FROM raw_logs
+    WHERE chain_id = @chain_id
+      AND block_number >= @from_block
+      AND block_number <= @to_block
+      AND topic0 = unhex('e1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c')  -- Deposit
+      AND length(data) = 32
+      AND topic1 IS NOT NULL
+      
+    UNION ALL
+    
+    -- ========================================================================
+    -- OUTGOING BALANCE CHANGES (WITHDRAWALS)
+    -- ========================================================================
+    
+    -- Standard ERC20 outgoing transfers (including burns to 0x0)
+    SELECT 
+        substring(topic1, 13, 20) as wallet,
+        address as token,
+        toUInt256(0) as deposits,
+        reinterpretAsUInt256(reverse(data)) as withdrawals
+    FROM raw_logs
+    WHERE chain_id = @chain_id
+      AND block_number >= @from_block
+      AND block_number <= @to_block
+      AND topic0 = unhex('ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef')  -- Transfer
+      AND length(data) = 32
+      AND topic1 IS NOT NULL
+      
+    UNION ALL
+    
+    -- Wrapped token withdrawals (WAVAX, WETH, etc)
+    SELECT 
+        substring(topic1, 13, 20) as wallet,
+        address as token,
+        toUInt256(0) as deposits,
+        reinterpretAsUInt256(reverse(data)) as withdrawals
+    FROM raw_logs
+    WHERE chain_id = @chain_id
+      AND block_number >= @from_block
+      AND block_number <= @to_block
+      AND topic0 = unhex('7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65')  -- Withdrawal
+      AND length(data) = 32
+      AND topic1 IS NOT NULL
+) transfers
+WHERE wallet != unhex('0000000000000000000000000000000000000000')  -- Skip zero address as wallet
+GROUP BY wallet, token
+HAVING deposits > 0 OR withdrawals > 0;  -- Only insert if there were changes
+
+-- ========================================================================
+-- DEBUG QUERIES (commented out - uncomment to use)
+-- ========================================================================
+
+-- 1. Check max processed block for a chain:
+-- SELECT max(last_block) as max_processed_block,
+--        count(DISTINCT (wallet, token)) as wallet_token_pairs,
+--        sum(deposits) as total_deposits, 
+--        sum(withdrawals) as total_withdrawals
+-- FROM erc20_balance_changes
+-- WHERE chain_id = 43114;
+
+-- 2. Check processing progress by chain:
+-- SELECT chain_id, 
+--        max(last_block) as max_block,
+--        count(DISTINCT (wallet, token)) as unique_pairs,
+--        max(computed_at) as last_updated
+-- FROM erc20_balance_changes
+-- GROUP BY chain_id;
+
+-- 3. Check specific wallet/token balance components:
+-- SELECT deposits, withdrawals, deposits - withdrawals as net_balance, last_block
+-- FROM erc20_balance_changes
+-- WHERE chain_id = 43114
+--   AND wallet = unhex('...')
+--   AND token = unhex('...');
+
+-- 4. Find tokens with most negative balances:
+-- SELECT lower(hex(token)) as token_addr, count(DISTINCT wallet) as negative_holders
+-- FROM erc20_balances WHERE chain_id = 43114 AND balance < 0
+-- GROUP BY token ORDER BY negative_holders DESC LIMIT 20;
+
+-- 5. Compare manual vs view calculation:
+-- WITH manual AS (
+--     SELECT sum(deposits) as d, sum(withdrawals) as w, sum(deposits) - sum(withdrawals) as bal
+--     FROM erc20_balance_changes
+--     WHERE chain_id = 43114 AND wallet = unhex('...') AND token = unhex('...')
+-- ), view_data AS (
+--     SELECT total_in, total_out, balance FROM erc20_balances
+--     WHERE chain_id = 43114 AND wallet = unhex('...') AND token = unhex('...')
+-- )
+-- SELECT m.d, v.total_in, m.d = v.total_in as match FROM manual m, view_data v;
